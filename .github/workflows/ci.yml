@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Unit tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r dev-requirements.txt
+
+      - name: Run pytest
+        run: |
+          pytest -q || PYTHONPATH=. pytest -q
+
+  bandit:
+    name: SAST (Bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Bandit scan
+        run: |
+          pip install bandit==1.7.9
+          bandit -r app -ll
+
+  sca:
+    name: SCA (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: pip-audit requirements
+        run: |
+          pip install pip-audit==2.7.3
+          pip-audit -r requirements.txt --strict
+
+  gitleaks:
+    name: Secret scan (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run gitleaks
+        uses: zricethezav/gitleaks-action@v2
+        with:
+          args: detect --source . --no-banner --redact
+
+  build_and_push:
+    name: Build & Push Docker image
+    runs-on: ubuntu-latest
+    needs: [test, bandit, sca, gitleaks]  # Hanya dijalankan jika semua job sebelumnya berhasil
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            dnhngrt/notes-app:latest
+            dnhngrt/notes-app:${{ github.sha }}
+          provenance: false
+
+  trivy_scan:
+    name: Image scan (Trivy dari Docker Hub)
+    runs-on: ubuntu-latest
+    needs: build_and_push
+    steps:
+      - name: Scan pushed image (by commit SHA)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: dnhngrt/notes-app:${{ github.sha }}
+          format: 'table'
+          vuln-type: 'os,library'
+          ignore-unfixed: true
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+
