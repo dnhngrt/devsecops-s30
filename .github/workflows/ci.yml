@@ -56,15 +56,26 @@ jobs:
           pip-audit -r requirements.txt --strict
 
   gitleaks:
-    name: Secret scan (Gitleaks)
+    name: Secret Scan (Gitleaks)
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    needs: [unit_test]
 
-      - name: Run gitleaks
-        uses: zricethezav/gitleaks-action@v2
+   steps:
+      - name: Checkout repo full history
+        uses: actions/checkout@v4
         with:
-          args: detect --source . --no-banner --redact
+          fetch-depth: 0
+
+      - name: Run Gitleaks scan
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          args: "--no-banner --report-format json --report-path gitleaks-results.json --exit-code 1"
+
+      - name: Upload Gitleaks report
+        uses: actions/upload-artifact@v3
+        with:
+          name: gitleaks-report
+          path: gitleaks-results.json
 
   build_and_push:
     name: Build & Push Docker image
